@@ -76,11 +76,47 @@ const INCIDENT_TYPES = {
 
 const INCIDENT_TYPE_KEYS = Object.keys(INCIDENT_TYPES);
 
+const Incident = require('./models/Incident');
+
 // ── Runtime State ──────────────────────────────────────────────────────────
 let leakState    = { active: false, levelKey: null, startTime: null, incidentType: null };
 let fanOverrides = {};
 let recoveryData = {};
 let incidentLog  = [];
+
+// Load history from MongoDB on startup
+async function loadHistory() {
+  try {
+    const history = await Incident.find().sort({ startTime: 1 });
+    incidentLog = history.map(h => ({
+      id: h.id,
+      levelKey: h.levelKey,
+      incidentType: h.incidentType,
+      incidentName: h.incidentName,
+      sector: h.sector,
+      startTime: h.startTime.toISOString(),
+      resolvedAt: h.resolvedAt ? h.resolvedAt.toISOString() : null,
+      status: h.status,
+      timeToResolve: h.timeToResolve
+    }));
+    
+    // Resume active leak if there's one
+    const active = incidentLog.find(i => i.status === 'ACTIVE');
+    if (active) {
+      leakState = {
+        active: true,
+        levelKey: active.levelKey,
+        startTime: new Date(active.startTime).getTime(),
+        incidentType: active.incidentType
+      };
+      console.log(`[TELEMETRY] Resumed active leak from DB: ${active.id}`);
+    }
+    console.log(`[TELEMETRY] Loaded ${incidentLog.length} historical incidents from MongoDB`);
+  } catch (err) {
+    console.error('[TELEMETRY] Error loading history from MongoDB:', err);
+  }
+}
+loadHistory();
 
 Object.keys(BASELINES).forEach(k => { fanOverrides[k] = false; });
 
@@ -220,12 +256,17 @@ function triggerLeak(levelKey = 'level_2', incidentTypeId = 'CO_LEAK') {
   fanOverrides[levelKey] = false;
 
   const incidentId = `VG-${new Date().getFullYear()}-${String(incidentLog.length + 1).padStart(3, '0')}`;
-  incidentLog.push({
+  const newIncident = {
     id: incidentId, levelKey, incidentType: incidentTypeId,
     incidentName: INCIDENT_TYPES[incidentTypeId].name,
     sector: Object.entries(SECTORS).find(([, s]) => s.levels.includes(levelKey))?.[0] || 'unknown',
     startTime: new Date().toISOString(), resolvedAt: null, status: 'ACTIVE',
-  });
+  };
+  
+  incidentLog.push(newIncident);
+  
+  // Save to MongoDB asynchronously
+  new Incident(newIncident).save().catch(err => console.error('[TELEMETRY] MongoDB save error:', err));
 
   console.log(`[TELEMETRY] ⚠️  ${INCIDENT_TYPES[incidentTypeId].emoji} ${INCIDENT_TYPES[incidentTypeId].name} — ${levelKey} | ${incidentId}`);
   return { incidentId, incidentType: incidentTypeId, levelKey };
@@ -242,11 +283,25 @@ function triggerRandomLeak() {
 // ── Reset ──────────────────────────────────────────────────────────────────
 function resetLeak() {
   const inc = incidentLog.find(i => i.status === 'ACTIVE');
-  if (inc) { inc.resolvedAt = new Date().toISOString(); inc.status = 'RESOLVED'; }
+  if (inc) { 
+    inc.resolvedAt = new Date().toISOString(); 
+    inc.status = 'RESOLVED'; 
+    Incident.updateOne({ id: inc.id }, { $set: { resolvedAt: inc.resolvedAt, status: 'RESOLVED' } }).catch(console.error);
+  }
   leakState = { active: false, levelKey: null, startTime: null, incidentType: null };
   Object.keys(fanOverrides).forEach(k => { fanOverrides[k] = false; });
   Object.keys(recoveryData).forEach(k => { delete recoveryData[k]; });
   console.log('[TELEMETRY] ✅ System reset — all levels nominal');
+}
+
+function resolveIncident(timeToResolve) {
+  const inc = incidentLog.find(i => i.status === 'ACTIVE');
+  if (inc) {
+    inc.resolvedAt = new Date().toISOString();
+    inc.status = 'RESOLVED';
+    inc.timeToResolve = timeToResolve;
+    Incident.updateOne({ id: inc.id }, { $set: { resolvedAt: inc.resolvedAt, status: 'RESOLVED', timeToResolve } }).catch(console.error);
+  }
 }
 
 // ── Fan Override ───────────────────────────────────────────────────────────
@@ -312,7 +367,7 @@ function startRecovery() {
 }
 
 module.exports = {
-  generateTelemetry, triggerLeak, triggerRandomLeak, resetLeak,
+  generateTelemetry, triggerLeak, triggerRandomLeak, resetLeak, resolveIncident,
   isLeakActive, applyFanOverride, getIncidentLog, getSectors,
   getIncidentTypes, startRecovery,
   SECTORS, BASELINES, INCIDENT_TYPES,

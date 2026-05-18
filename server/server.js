@@ -1,15 +1,17 @@
 /**
  * Venti-Guard Backend Server — Incident-Type Edition
  */
+require('dotenv').config();
 const express = require('express');
 const http    = require('http');
 const path    = require('path');
 const { Server } = require('socket.io');
 const cors    = require('cors');
+const mongoose = require('mongoose');
 const {
   generateTelemetry, triggerLeak, triggerRandomLeak, resetLeak,
   isLeakActive, applyFanOverride, getIncidentLog, getSectors, getIncidentTypes,
-  startRecovery,
+  startRecovery, resolveIncident
 } = require('./telemetry');
 
 const PORT   = process.env.PORT || 4000;
@@ -29,6 +31,11 @@ if (isProd) {
     res.sendFile(path.join(distPath, 'index.html'))
   );
 }
+
+// ── MongoDB Connection ────────────────────────────────────────────────────
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/venti-guard')
+  .then(() => console.log('[DATABASE] MongoDB Connected Successfully'))
+  .catch((err) => console.error('[DATABASE] MongoDB Connection Error:', err));
 
 const server = http.createServer(app);
 const io     = new Server(server, {
@@ -95,9 +102,7 @@ io.on('connection', (socket) => {
   socket.on('get_incidents', () => socket.emit('incident_log', { incidents: getIncidentLog() }));
 
   socket.on('incident_resolved', (data) => {
-    const log = getIncidentLog();
-    const inc = log.find(i => i.status === 'ACTIVE');
-    if (inc) { inc.resolvedAt = new Date().toISOString(); inc.status = 'RESOLVED'; inc.timeToResolve = data?.timeToResolve; }
+    resolveIncident(data?.timeToResolve);
     io.emit('system_event', { type:'INCIDENT_RESOLVED', timestamp: new Date().toISOString() });
   });
 
