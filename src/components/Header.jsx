@@ -64,7 +64,7 @@ const Header = ({ systemCritical, connected, onTriggerLeak, onTriggerRandom, onR
         </motion.div>
         <div>
           <h1 className="text-base font-extrabold tracking-wider text-slate-100">
-            VENTI<span className={systemCritical ? 'text-red-400' : 'text-cyan-400'}>-GUARD</span>
+            VENTI<span className={systemCritical ? 'text-red-400' : 'text-cyan-400'}>-GUARD AI</span>
           </h1>
           <p className="text-[9px] text-slate-500 font-mono tracking-widest uppercase">Mining Safety HMI · 6 Zones · 5 Incident Types</p>
         </div>
